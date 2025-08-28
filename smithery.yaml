@@ -5,8 +5,6 @@ startCommand:
   # JSON Schema defining the configuration options for the MCP.
   configSchema:
     type: "object"
-    required:
-      - "ltaApiKey"
     properties:
       ltaApiKey:
         type: "string"

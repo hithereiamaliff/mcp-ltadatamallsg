@@ -10,19 +10,16 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import axios from "axios";
 import dotenv from "dotenv";
-import { z } from "zod";
 
 // Load environment variables
 dotenv.config();
 
-// Configuration schema
-export const configSchema = z.object({
-  ltaApiKey: z.string().describe("LTA DataMall API key"),
-});
-
-export type Config = z.infer<typeof configSchema>;
-
-export function createServer(config: Config) {
+export function createServer() {
+  // Get API key from environment
+  const ltaApiKey = process.env.LTA_API_KEY;
+  if (!ltaApiKey) {
+    throw new Error("LTA_API_KEY environment variable is required");
+  }
   const server = new Server({
     name: "lta-datamall-server",
     version: "0.1.0"
@@ -139,7 +136,7 @@ export function createServer(config: Config) {
               ...(serviceNo && { ServiceNo: serviceNo })
             },
             headers: {
-              'AccountKey': config.ltaApiKey,
+              'AccountKey': ltaApiKey,
               'accept': 'application/json'
             }
           });
@@ -175,7 +172,7 @@ export function createServer(config: Config) {
               TrainLine: trainLine
             },
             headers: {
-              'AccountKey': config.ltaApiKey,
+              'AccountKey': ltaApiKey,
               'accept': 'application/json'
             }
           });
@@ -204,7 +201,7 @@ export function createServer(config: Config) {
         try {
           const response = await axios.get('https://datamall2.mytransport.sg/ltaodataservice/TrainServiceAlerts', {
             headers: {
-              'AccountKey': config.ltaApiKey,
+              'AccountKey': ltaApiKey,
               'accept': 'application/json'
             }
           });
@@ -233,7 +230,7 @@ export function createServer(config: Config) {
         try {
           const response = await axios.get('https://datamall2.mytransport.sg/ltaodataservice/CarParkAvailabilityv2', {
             headers: {
-              'AccountKey': config.ltaApiKey,
+              'AccountKey': ltaApiKey,
               'accept': 'application/json'
             }
           });
@@ -262,7 +259,7 @@ export function createServer(config: Config) {
         try {
           const response = await axios.get('https://datamall2.mytransport.sg/ltaodataservice/EstTravelTimes', {
             headers: {
-              'AccountKey': config.ltaApiKey,
+              'AccountKey': ltaApiKey,
               'accept': 'application/json'
             }
           });
@@ -291,7 +288,7 @@ export function createServer(config: Config) {
         try {
           const response = await axios.get('https://datamall2.mytransport.sg/ltaodataservice/TrafficIncidents', {
             headers: {
-              'AccountKey': config.ltaApiKey,
+              'AccountKey': ltaApiKey,
               'accept': 'application/json'
             }
           });
@@ -327,7 +324,7 @@ export function createServer(config: Config) {
               TrainLine: trainLine
             },
             headers: {
-              'AccountKey': config.ltaApiKey,
+              'AccountKey': ltaApiKey,
               'accept': 'application/json'
             }
           });
@@ -364,19 +361,13 @@ export function createServer(config: Config) {
 }
 
 // Export default function for Smithery HTTP deployment
-export default function createServerForSmithery({ config }: { config: Config }) {
-  return createServer(config);
+export default function createServerForSmithery() {
+  return createServer();
 }
 
 // For backward compatibility with STDIO (when run directly)
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const ltaApiKey = process.env.LTA_API_KEY;
-  if (!ltaApiKey) {
-    console.error("LTA_API_KEY environment variable is required");
-    process.exit(1);
-  }
-  
-  const server = createServer({ ltaApiKey });
+  const server = createServer();
   const transport = new StdioServerTransport();
   
   server.connect(transport).then(() => {
