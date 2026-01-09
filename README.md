@@ -77,8 +77,8 @@ By default, this server uses a shared LTA DataMall API key for convenience. To *
 ### How to Get Your Own API Key
 
 1. Visit [LTA DataMall](https://datamall.lta.gov.sg/content/datamall/en.html)
-2. Click **"Request for API Access"** and create an account
-3. Once approved, find your API key in your account dashboard
+2. Click **"Request for API Access"** and fill in the provided form, then hit Submit button.
+3. Once approved, find your API key in the email sent to you.
 4. Add `?apiKey=YOUR_KEY` to the MCP URL above
 
 ---
