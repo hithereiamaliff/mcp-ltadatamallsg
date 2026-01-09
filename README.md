@@ -61,7 +61,7 @@ Once configured, you can ask your AI assistant things like:
 
 ## 🔑 Using Your Own API Key (Optional)
 
-The server provides a default quota for everyone to try. For **higher API limits**, you can use your own LTA DataMall API key:
+By default, this server uses a shared LTA DataMall API key for convenience. To **avoid rate limiting during heavy usage**, you can provide your own LTA DataMall API key:
 
 ```json
 {
