@@ -18,7 +18,7 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
           script: |
-            cd /opt/mcp-servers/mcp-ltadatamall
+            cd /opt/mcp-servers/mcp-ltadatamallsg
             git pull origin main
             
             # Create/update .env with LTA API key from GitHub secrets
