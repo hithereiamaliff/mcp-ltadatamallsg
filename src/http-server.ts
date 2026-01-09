@@ -55,16 +55,29 @@ function ensureDataDir(): void {
   }
 }
 
+// Ensure analytics object has all required properties
+function ensureAnalyticsStructure(data: Partial<AnalyticsData>): AnalyticsData {
+  return {
+    serverStartTime: data.serverStartTime || new Date().toISOString(),
+    totalRequests: data.totalRequests || 0,
+    totalToolCalls: data.totalToolCalls || 0,
+    requestsByMethod: data.requestsByMethod || {},
+    requestsByEndpoint: data.requestsByEndpoint || {},
+    toolCalls: data.toolCalls || {},
+    recentToolCalls: data.recentToolCalls || [],
+    clientsByIp: data.clientsByIp || {},
+    clientsByUserAgent: data.clientsByUserAgent || {},
+    hourlyRequests: data.hourlyRequests || {},
+  };
+}
+
 // Load analytics from disk/Firebase on startup
 async function loadAnalytics(): Promise<void> {
   try {
     // Try Firebase first
     const firebaseData = await loadFromFirebase();
     if (firebaseData) {
-      analytics = {
-        ...firebaseData,
-        serverStartTime: firebaseData.serverStartTime || new Date().toISOString(),
-      };
+      analytics = ensureAnalyticsStructure(firebaseData);
       console.log(`📊 Loaded analytics from Firebase`);
       console.log(`   Total requests: ${analytics.totalRequests}`);
       return;
@@ -74,11 +87,8 @@ async function loadAnalytics(): Promise<void> {
     ensureDataDir();
     if (fs.existsSync(ANALYTICS_FILE)) {
       const data = fs.readFileSync(ANALYTICS_FILE, 'utf-8');
-      const loaded = JSON.parse(data) as AnalyticsData;
-      analytics = {
-        ...loaded,
-        serverStartTime: loaded.serverStartTime || new Date().toISOString(),
-      };
+      const loaded = JSON.parse(data) as Partial<AnalyticsData>;
+      analytics = ensureAnalyticsStructure(loaded);
       console.log(`📊 Loaded analytics from ${ANALYTICS_FILE}`);
       console.log(`   Total requests: ${analytics.totalRequests}`);
     } else {

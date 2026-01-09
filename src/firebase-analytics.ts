@@ -57,7 +57,10 @@ function sanitizeKey(key: string): string {
 /**
  * Sanitize all keys in an object for Firebase
  */
-function sanitizeObjectKeys(obj: Record<string, any>): Record<string, any> {
+function sanitizeObjectKeys(obj: Record<string, any> | null | undefined): Record<string, any> {
+  if (!obj || typeof obj !== 'object') {
+    return {};
+  }
   const sanitized: Record<string, any> = {};
   for (const [key, value] of Object.entries(obj)) {
     const sanitizedKey = sanitizeKey(key);
