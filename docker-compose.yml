@@ -12,6 +12,8 @@ services:
       - PORT=8080
       - HOST=0.0.0.0
       - LTA_API_KEY=${LTA_API_KEY:-}
+      - KEY_SERVICE_URL=${KEY_SERVICE_URL:-}
+      - KEY_SERVICE_TOKEN=${KEY_SERVICE_TOKEN:-}
       - NODE_ENV=production
       - ANALYTICS_DIR=/app/data
       - FIREBASE_DATABASE_URL=${FIREBASE_DATABASE_URL:-https://mcp-analytics-49b45-default-rtdb.asia-southeast1.firebasedatabase.app}

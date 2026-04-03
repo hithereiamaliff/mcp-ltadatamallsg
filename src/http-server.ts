@@ -20,6 +20,7 @@ import {
   isFirebaseEnabled,
   getFirebaseStatus,
 } from './firebase-analytics.js';
+import { isKeyServiceEnabled, resolveKeyCredentials } from './utils/key-service.js';
 
 dotenv.config();
 
@@ -173,17 +174,92 @@ function getUptime(): string {
 }
 
 /**
- * Get LTA API key with fallback logic:
- * 1. User-provided key via query param (?apiKey=xxx) - optional, for users with their own key
- * 2. Server's default LTA_API_KEY environment variable - for users without their own key
- * 
- * URL patterns:
- * - /mcp (uses server's default key)
- * - /mcp?apiKey=USER_KEY (uses user's own key)
+ * Detect a hosted user key (usr_xxx) in query params.
+ * Supports both ?api_key= and ?apiKey= for compatibility.
  */
-function getApiKey(req: Request): string {
-  const userKey = req.query.apiKey as string;
-  return userKey || DEFAULT_LTA_API_KEY;
+function getHostedUserKeyFromQuery(req: Request): string | undefined {
+  const candidate = req.query.api_key ?? req.query.apiKey;
+  return typeof candidate === 'string' && candidate.startsWith('usr_')
+    ? candidate
+    : undefined;
+}
+
+/**
+ * Check if an MCP method is a discovery/scanning request
+ * (Smithery sends these to discover server capabilities without real API calls).
+ */
+function isDiscoveryRequest(mcpMethod: string | undefined): boolean {
+  return !!mcpMethod && [
+    'initialize', 'tools/list', 'resources/list', 'prompts/list', 'notifications/initialized'
+  ].includes(mcpMethod);
+}
+
+/**
+ * Handle an MCP request with per-request server/transport isolation.
+ * Used for key-service routes where each request is independent.
+ */
+async function handlePerRequestMcp(req: Request, res: Response, ltaApiKey: string): Promise<void> {
+  const server = new Server({
+    name: 'lta-datamall-server',
+    version: '1.0.0'
+  }, {
+    capabilities: { tools: {} }
+  });
+
+  registerTools(server, ltaApiKey);
+
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+  });
+
+  let cleanedUp = false;
+  const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    transport.close();
+    server.close();
+  };
+  res.once('finish', cleanup);
+  res.once('close', cleanup);
+
+  await server.connect(transport);
+  await transport.handleRequest(req, res, req.body);
+}
+
+/**
+ * Handle discovery requests with a demo server (no API key needed).
+ */
+async function handleDiscoveryRequest(req: Request, res: Response): Promise<void> {
+  const demoServer = new Server({
+    name: 'lta-datamall-server',
+    version: '1.0.0'
+  }, {
+    capabilities: {
+      resources: {},
+      tools: {},
+      prompts: {},
+      logging: {}
+    }
+  });
+
+  registerDemoTools(demoServer);
+
+  const demoTransport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+  });
+
+  let cleanedUp = false;
+  const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    demoTransport.close();
+    demoServer.close();
+  };
+  res.once('finish', cleanup);
+  res.once('close', cleanup);
+
+  await demoServer.connect(demoTransport);
+  await demoTransport.handleRequest(req, res, req.body);
 }
 
 const app = express();
@@ -221,7 +297,9 @@ app.get('/', (req: Request, res: Response) => {
     ],
     apiKeyInfo: {
       required: false,
-      description: 'Optional. Use /mcp for default quota, or /mcp?apiKey=YOUR_KEY to use your own LTA DataMall API key'
+      description: isKeyServiceEnabled()
+        ? 'Use /mcp for default quota, or /mcp/usr_XXX (or /mcp?api_key=usr_XXX) for key-service managed credentials via mcpkeys.techmavie.digital'
+        : 'Uses server default quota. No user-provided API key supported in this mode.'
     }
   });
 });
@@ -259,12 +337,17 @@ app.get('/.well-known/mcp/server-card.json', (req: Request, res: Response) => {
       resources: true,
       prompts: true
     },
-    authentication: {
-      type: 'query-params',
-      params: [
-        { name: 'apiKey', required: false, description: 'Your LTA DataMall API key (optional - server provides default quota)' }
-      ]
-    }
+    authentication: isKeyServiceEnabled()
+      ? {
+          type: 'query-params',
+          params: [
+            { name: 'api_key', required: false, description: 'Your usr_XXX key from mcpkeys.techmavie.digital' }
+          ]
+        }
+      : {
+          type: 'none',
+          description: 'Server provides default quota, no authentication required'
+        }
   });
 });
 
@@ -277,12 +360,13 @@ app.get('/.well-known/mcp-config', (req: Request, res: Response) => {
     schema: {
       type: 'object',
       properties: {
-        apiKey: {
-          type: 'string',
-          description: 'Your LTA DataMall API key (optional - server provides default quota)',
-          title: 'LTA DataMall API Key',
-          format: 'password'
-        }
+        ...(isKeyServiceEnabled() && {
+          api_key: {
+            type: 'string',
+            description: 'Your usr_XXX key from mcpkeys.techmavie.digital',
+            title: 'Key Service API Key'
+          }
+        })
       },
       required: []
     }
@@ -352,59 +436,101 @@ app.post('/analytics/import', (req: Request, res: Response) => {
   }
 });
 
-// MCP endpoint handler
-app.all('/mcp', async (req: Request, res: Response) => {
-  trackRequest(req, '/mcp');
-  const ltaApiKey = getApiKey(req);
-  
-  // Handle Smithery discovery/scanning requests (no credentials required)
-  // Smithery sends POST with MCP initialize/tools/list methods to discover server capabilities
-  // We create a temporary demo server to handle these requests without real API calls
-  const mcpMethod = req.body?.method;
-  const isDiscoveryRequest = mcpMethod && (
-    mcpMethod === 'initialize' ||
-    mcpMethod === 'tools/list' ||
-    mcpMethod === 'resources/list' ||
-    mcpMethod === 'prompts/list' ||
-    mcpMethod === 'notifications/initialized'
-  );
-  
-  // For discovery requests, use demo server (no API key needed)
-  if (isDiscoveryRequest && !ltaApiKey) {
-    console.log(`[DEBUG] Handling discovery request: ${mcpMethod}`);
-    
-    const demoServer = new Server({
-      name: 'lta-datamall-server',
-      version: '1.0.0'
-    }, {
-      capabilities: {
-        resources: {},
-        tools: {},
-        prompts: {},
-        logging: {}
-      }
+// MCP endpoint handler — key-service path-based route
+app.all('/mcp/:userKey', async (req: Request, res: Response) => {
+  trackRequest(req, '/mcp/:userKey');
+
+  if (!isKeyServiceEnabled()) {
+    res.status(503).json({
+      error: 'service_unavailable',
+      message: 'Key service not configured. Set KEY_SERVICE_URL and KEY_SERVICE_TOKEN.',
     });
-    
-    // Register demo tools for discovery
-    registerDemoTools(demoServer);
-    
-    const demoTransport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-    });
-    
-    res.on('close', () => {
-      demoTransport.close();
-    });
-    
-    await demoServer.connect(demoTransport);
-    await demoTransport.handleRequest(req, res, req.body);
     return;
   }
-  
+
+  const userKey = req.params.userKey;
+  if (!userKey.startsWith('usr_')) {
+    res.status(400).json({ error: 'invalid_key', message: 'User key must start with usr_' });
+    return;
+  }
+
+  const result = await resolveKeyCredentials(userKey);
+  if (!result.ok) {
+    const statusMap = { invalid_key: 403, service_unavailable: 503, malformed_response: 502 } as const;
+    res.status(statusMap[result.reason]).json({ error: result.reason, message: result.message });
+    return;
+  }
+
+  // Discovery requests still work when the resolved user profile has no stored API key.
+  if (isDiscoveryRequest(req.body?.method)) {
+    await handleDiscoveryRequest(req, res);
+    return;
+  }
+
+  const effectiveKey = result.apiKey || DEFAULT_LTA_API_KEY;
+  if (!effectiveKey) {
+    res.status(500).json({ error: 'no_api_key', message: 'No LTA API key available' });
+    return;
+  }
+
+  await handlePerRequestMcp(req, res, effectiveKey);
+});
+
+// MCP endpoint handler — default route
+app.all('/mcp', async (req: Request, res: Response) => {
+  // Check for hosted user key in query params (usr_xxx)
+  const hostedUserKey = getHostedUserKeyFromQuery(req);
+
+  if (hostedUserKey) {
+    if (!isKeyServiceEnabled()) {
+      trackRequest(req, '/mcp/:userKey');
+      res.status(503).json({
+        error: 'service_unavailable',
+        message: 'Key service not configured. Set KEY_SERVICE_URL and KEY_SERVICE_TOKEN.',
+      });
+      return;
+    }
+
+    trackRequest(req, '/mcp/:userKey');
+
+    const result = await resolveKeyCredentials(hostedUserKey);
+    if (!result.ok) {
+      const statusMap = { invalid_key: 403, service_unavailable: 503, malformed_response: 502 } as const;
+      res.status(statusMap[result.reason]).json({ error: result.reason, message: result.message });
+      return;
+    }
+
+    // Discovery requests: use demo server
+    if (isDiscoveryRequest(req.body?.method)) {
+      await handleDiscoveryRequest(req, res);
+      return;
+    }
+
+    const effectiveKey = result.apiKey || DEFAULT_LTA_API_KEY;
+    if (!effectiveKey) {
+      res.status(500).json({ error: 'no_api_key', message: 'No LTA API key available' });
+      return;
+    }
+
+    await handlePerRequestMcp(req, res, effectiveKey);
+    return;
+  }
+
+  // No hosted key — use server default (session-based)
+  trackRequest(req, '/mcp');
+  const ltaApiKey = DEFAULT_LTA_API_KEY;
+
+  // Discovery requests without API key: use demo server
+  if (isDiscoveryRequest(req.body?.method) && !ltaApiKey) {
+    console.log(`[DEBUG] Handling discovery request: ${req.body?.method}`);
+    await handleDiscoveryRequest(req, res);
+    return;
+  }
+
   if (!ltaApiKey) {
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Server configuration error: No LTA API key available',
-      hint: 'Either provide your own key via ?apiKey= or contact the server administrator'
+      hint: 'Contact the server administrator or use a key-service key (usr_XXX)',
     });
     return;
   }
@@ -429,22 +555,28 @@ app.all('/mcp', async (req: Request, res: Response) => {
       }
     });
 
-    // Register tools
     registerTools(server, ltaApiKey);
 
-    // Create transport
+    // Track the generated session ID for proper cleanup
+    let generatedSessionId: string | undefined;
+
     transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => crypto.randomUUID(),
       onsessioninitialized: (id: string) => {
+        generatedSessionId = id;
         transports.set(id, transport);
       }
     });
 
-    // Clean up on close
+    // Clean up on close — use the generated ID, not the request header
     transport.onclose = () => {
-      if (sessionId) {
-        transports.delete(sessionId);
+      const idToDelete = generatedSessionId || sessionId;
+      if (idToDelete) {
+        transports.delete(idToDelete);
       }
+      void server.close().catch((error) => {
+        console.error('Failed to close MCP server:', error);
+      });
     };
 
     await server.connect(transport);
@@ -835,11 +967,16 @@ async function startServer() {
     console.log(`LTA DataMall MCP Server running on http://${HOST}:${PORT}`);
     console.log(`Health check: http://${HOST}:${PORT}/health`);
     console.log(`MCP endpoint: http://${HOST}:${PORT}/mcp`);
+    console.log(
+      `Key service: ${isKeyServiceEnabled()
+        ? `enabled (hosted routes: http://${HOST}:${PORT}/mcp/:userKey, /mcp?api_key=usr_...)`
+        : 'disabled'}`
+    );
     console.log(`Analytics: http://${HOST}:${PORT}/analytics/dashboard`);
     if (DEFAULT_LTA_API_KEY) {
       console.log('Default LTA API key configured ✓');
     } else {
-      console.warn('Warning: No default LTA_API_KEY set. Users must provide their own key via ?apiKey=');
+      console.warn('Warning: No default LTA_API_KEY set.');
     }
   });
 
