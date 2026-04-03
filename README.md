@@ -51,7 +51,8 @@ Copy this configuration to your MCP client (Claude Desktop, Cursor, Windsurf, et
 
 Once configured, you can ask your AI assistant things like:
 
-- *"When is the next bus 143 arriving at bus stop 83139?"*
+- *"When is the next bus arriving at Marsiling Mall?"* (the AI will look up the bus stop code automatically)
+- *"When is bus 143 arriving at bus stop 83139?"*
 - *"How crowded is the North-South Line right now?"*
 - *"Are there any train service disruptions?"*
 - *"Show me traffic incidents on the expressways"*
@@ -61,34 +62,43 @@ Once configured, you can ask your AI assistant things like:
 
 ## 🔑 Using Your Own API Key (Optional)
 
-By default, this server uses a shared LTA DataMall API key for convenience. To **avoid rate limiting during heavy usage**, you can provide your own LTA DataMall API key:
+By default, this server uses a shared LTA DataMall API key for convenience. To **avoid rate limiting during heavy usage**, you can register your own key via the **MCP Key Service**:
+
+1. Visit [mcpkeys.techmavie.digital](https://mcpkeys.techmavie.digital) and register your LTA DataMall API key
+2. You'll receive a `usr_XXXXXXXX` key
+3. Use it in your MCP client config:
 
 ```json
 {
   "mcpServers": {
     "lta-datamall": {
       "transport": "streamable-http",
-      "url": "https://mcp.techmavie.digital/ltadatamallsg/mcp?apiKey=YOUR_LTA_API_KEY"
+      "url": "https://mcp.techmavie.digital/ltadatamallsg/mcp/usr_YOUR_KEY_HERE"
     }
   }
 }
 ```
 
-### How to Get Your Own API Key
+Alternatively, use the query parameter format: `/mcp?api_key=usr_YOUR_KEY_HERE`
+
+> **Note:** Registering an LTA API key is optional even with the key service — you can register without one and still use the server's default quota.
+
+### How to Get Your Own LTA DataMall API Key
 
 1. Visit [LTA DataMall](https://datamall.lta.gov.sg/content/datamall/en.html)
 2. Click **"Request for API Access"** and fill in the provided form, then hit Submit button.
 3. Once approved, find your API key in the email sent to you.
-4. Add `?apiKey=YOUR_KEY` to the MCP URL above
+4. Register it at [mcpkeys.techmavie.digital](https://mcpkeys.techmavie.digital)
 
 ---
 
 ## 🛠️ Available Tools
 
-This MCP server provides **7 tools** for accessing Singapore transport data:
+This MCP server provides **8 tools** for accessing Singapore transport data:
 
 | Tool | Description | Update Frequency |
 |------|-------------|------------------|
+| `bus_stop_search` | Look up bus stop codes by name, road, or landmark | Cached (24h) |
 | `bus_arrival` | Real-time bus arrival times, locations & crowding | Real-time |
 | `station_crowding` | MRT/LRT station crowdedness levels | Every 10 min |
 | `station_crowd_forecast` | Predicted station crowding (30-min intervals) | Periodic |
@@ -98,6 +108,16 @@ This MCP server provides **7 tools** for accessing Singapore transport data:
 | `traffic_incidents` | Accidents, roadworks & heavy traffic | Every 2 min |
 
 ### Tool Details
+
+#### 🔍 `bus_stop_search`
+Search for bus stop codes by name, road, or landmark. Use this to find the 5-digit bus stop code needed for `bus_arrival`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | ✅ | Search query (e.g., "Marsiling Mall", "Orchard", "Victoria St") |
+| `limit` | number | ❌ | Max results to return (default: 10, max: 20) |
+
+> The bus stop database (~5,500 stops) is loaded on first search and cached for 24 hours.
 
 #### 🚌 `bus_arrival`
 Get real-time bus arrival information for any bus stop in Singapore.
@@ -172,17 +192,24 @@ This fork introduces major improvements over the [original repository](https://g
 2. **Zero-Friction Onboarding**
    - Server provides default API quota
    - Users can start immediately without registration
-   - Optional personal API key for higher limits
+   - Optional personal API key via MCP Key Service
 
-3. **Production Infrastructure**
+3. **Bus Stop Search** (`src/bus-stops-cache.ts`)
+   - Look up bus stop codes by name, road, or landmark
+   - Lazy-loaded cache of all ~5,500 Singapore bus stops
+   - No more web searching for bus stop codes
+
+4. **MCP Key Service Integration** (`src/utils/key-service.ts`)
+   - Centralized credential management via `usr_xxx` keys
+   - Per-request server/transport isolation for key-service users
+   - 60-second cache with request deduplication
+
+5. **Production Infrastructure**
    - Docker + Docker Compose configuration
    - Nginx reverse proxy setup
    - GitHub Actions auto-deployment
    - Health checks and graceful shutdown
-
-4. **Removed Smithery Dependencies**
-   - No more `smithery.yaml`
-   - Clean, standalone deployment
+   - Firebase analytics with dashboard
 
 ---
 
@@ -192,7 +219,12 @@ This fork introduces major improvements over the [original repository](https://g
 |----------|--------|-------------|
 | `/` | GET | Server information and available tools |
 | `/health` | GET | Health check (for monitoring) |
-| `/mcp` | POST | MCP protocol endpoint |
+| `/mcp` | POST | MCP protocol endpoint (server default key) |
+| `/mcp/:userKey` | POST | MCP protocol endpoint (key-service auth) |
+| `/analytics` | GET | Usage analytics (JSON) |
+| `/analytics/dashboard` | GET | Analytics dashboard (HTML) |
+| `/.well-known/mcp/server-card.json` | GET | Smithery server discovery |
+| `/.well-known/mcp-config` | GET | MCP client configuration schema |
 
 ---
 
@@ -220,6 +252,8 @@ Want to host your own instance? Here's what you need:
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `LTA_API_KEY` | ✅ | — | Your LTA DataMall API key |
+| `KEY_SERVICE_URL` | ❌ | — | MCP Key Service resolve endpoint (enables `/mcp/:userKey` route) |
+| `KEY_SERVICE_TOKEN` | ❌ | — | Bearer token for key service (unique per server) |
 | `PORT` | ❌ | `8080` | Server port |
 | `HOST` | ❌ | `0.0.0.0` | Server host |
 
@@ -232,6 +266,8 @@ Set these in your repository settings:
 - `VPS_SSH_KEY` — Private SSH key
 - `VPS_PORT` — SSH port (usually 22)
 - `LTA_API_KEY` — Your LTA DataMall API key
+- `KEY_SERVICE_URL` — MCP Key Service resolve endpoint (optional)
+- `KEY_SERVICE_TOKEN` — Bearer token for key service (optional)
 
 ---
 
