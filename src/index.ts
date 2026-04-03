@@ -10,6 +10,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import axios from "axios";
 import dotenv from "dotenv";
+import { searchBusStops } from "./bus-stops-cache.js";
 
 // Load environment variables
 dotenv.config();
@@ -115,6 +116,24 @@ export function createServer() {
             }
           },
           required: ["trainLine"]
+        }
+      },
+      {
+        name: "bus_stop_search",
+        description: "Search for bus stop codes by name, road, or landmark. Use this to find the 5-digit bus stop code needed for bus_arrival. Returns matching bus stops with codes, names, roads, and coordinates.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            query: {
+              type: "string",
+              description: "Search query — bus stop name, road name, landmark, or partial bus stop code (e.g. \"Marsiling Mall\", \"Orchard\", \"Victoria St\")"
+            },
+            limit: {
+              type: "number",
+              description: "Maximum number of results to return (default: 10, max: 20)"
+            }
+          },
+          required: ["query"]
         }
       }]
     };
@@ -328,7 +347,7 @@ export function createServer() {
               'accept': 'application/json'
             }
           });
-          
+
           return {
             content: [{
               type: "text",
@@ -346,6 +365,41 @@ export function createServer() {
             };
           }
           throw error;
+        }
+      }
+
+      case "bus_stop_search": {
+        const { query, limit } = request.params.arguments as {
+          query: string;
+          limit?: number;
+        };
+        const maxResults = typeof limit === 'number' && Number.isFinite(limit)
+          ? Math.max(0, Math.min(Math.floor(limit), 20))
+          : 10;
+        try {
+          const results = await searchBusStops(query, ltaApiKey, maxResults);
+          if (results.length === 0) {
+            return {
+              content: [{
+                type: "text",
+                text: `No bus stops found matching "${query}"`
+              }]
+            };
+          }
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify(results, null, 2)
+            }]
+          };
+        } catch (error) {
+          return {
+            content: [{
+              type: "text",
+              text: `Bus stop search error: ${error instanceof Error ? error.message : String(error)}`
+            }],
+            isError: true
+          };
         }
       }
 

@@ -21,6 +21,7 @@ import {
   getFirebaseStatus,
 } from './firebase-analytics.js';
 import { isKeyServiceEnabled, resolveKeyCredentials } from './utils/key-service.js';
+import { searchBusStops } from './bus-stops-cache.js';
 
 dotenv.config();
 
@@ -288,6 +289,7 @@ app.get('/', (req: Request, res: Response) => {
     },
     tools: [
       'bus_arrival',
+      'bus_stop_search',
       'station_crowding',
       'train_alerts',
       'carpark_availability',
@@ -646,6 +648,17 @@ function registerDemoTools(server: Server) {
           },
           required: ['trainLine']
         }
+      }, {
+        name: 'bus_stop_search',
+        description: 'Search for bus stop codes by name, road, or landmark. Use this to find the 5-digit bus stop code needed for bus_arrival. Returns matching bus stops with codes, names, roads, and coordinates.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Search query — bus stop name, road name, landmark, or partial bus stop code (e.g. "Marsiling Mall", "Orchard", "Victoria St")' },
+            limit: { type: 'number', description: 'Maximum number of results to return (default: 10, max: 20)' }
+          },
+          required: ['query']
+        }
       }]
     };
   });
@@ -719,6 +732,17 @@ function registerTools(server: Server, ltaApiKey: string) {
           },
           required: ['trainLine']
         }
+      }, {
+        name: 'bus_stop_search',
+        description: 'Search for bus stop codes by name, road, or landmark. Use this to find the 5-digit bus stop code needed for bus_arrival. Returns matching bus stops with codes, names, roads, and coordinates.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Search query — bus stop name, road name, landmark, or partial bus stop code (e.g. "Marsiling Mall", "Orchard", "Victoria St")' },
+            limit: { type: 'number', description: 'Maximum number of results to return (default: 10, max: 20)' }
+          },
+          required: ['query']
+        }
       }]
     };
   });
@@ -765,6 +789,21 @@ function registerTools(server: Server, ltaApiKey: string) {
       case 'station_crowd_forecast': {
         const { trainLine } = args as { trainLine: string };
         return makeRequest('https://datamall2.mytransport.sg/ltaodataservice/PCDForecast', { TrainLine: trainLine });
+      }
+      case 'bus_stop_search': {
+        const { query, limit } = args as { query: string; limit?: number };
+        const maxResults = typeof limit === 'number' && Number.isFinite(limit)
+          ? Math.max(0, Math.min(Math.floor(limit), 20))
+          : 10;
+        try {
+          const results = await searchBusStops(query, ltaApiKey, maxResults);
+          if (results.length === 0) {
+            return { content: [{ type: 'text' as const, text: `No bus stops found matching "${query}"` }] };
+          }
+          return { content: [{ type: 'text' as const, text: JSON.stringify(results, null, 2) }] };
+        } catch (error) {
+          return { content: [{ type: 'text' as const, text: `Bus stop search error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
+        }
       }
       default:
         throw new Error(`Unknown tool: ${name}`);
